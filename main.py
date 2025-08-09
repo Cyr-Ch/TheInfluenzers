@@ -8,7 +8,7 @@ openai.api_key = OPENAI_API_KEY
 def generate_script(prompt):
     resp = openai.ChatCompletion.create(
         model="gpt-4o",
-        messages=[{"role": "user", "content": f"Write a 12-second YouTube Short script with a strong hook, ending with a call to action. Topic: {prompt}"}]
+        messages=[{"role": "user", "content": f"Write a 12-second YouTube Short script with a strong hook, ending with a call to action, based on the following user prompt: {prompt}"}]
     )
     return resp.choices[0].message["content"]
 
