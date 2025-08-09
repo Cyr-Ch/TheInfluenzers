@@ -1,0 +1,7 @@
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
+openai
+requests
+ffmpeg-python
+python-dotenv

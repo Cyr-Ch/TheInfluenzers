@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Environments
+.env
+.env.*
+.venv/
+venv/
+
+# OS
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Video/media artifacts
+*.mp4
+*.mov
+*.wav
+*.mp3
+*.m4a
+*.webm
+*.tmp
+*.part
+*.ts
+
+# Credentials
+client_secret.json
+token.json
+
+
