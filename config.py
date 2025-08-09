@@ -13,6 +13,7 @@ load_dotenv(dotenv_path=ENV_PATH)
 # API keys and paths
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
+RUNWAY_API_KEY = os.getenv("RUNWAY_API_KEY")
 
 # Path to your Google OAuth client secrets JSON file
 # Defaults to "client_secret.json" in the project if not provided
