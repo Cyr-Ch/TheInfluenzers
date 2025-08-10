@@ -1,146 +1,103 @@
-import requests
-import ffmpeg
+import os
 import time
-from typing import Optional
-from config import RUNWAY_API_KEY
+import requests
+from typing import Optional, Tuple
 
-RUNWAY_API_BASE = "https://api.runwayml.com/v1"
+# ---- Azure OpenAI (Sora) config ----
+AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY")
+AZURE_OPENAI_API_VERSION = os.environ.get("OPENAI_API_VERSION", "preview")
 
+if not AZURE_OPENAI_ENDPOINT:
+    raise RuntimeError("AZURE_OPENAI_ENDPOINT must be set in environment")
+if not AZURE_OPENAI_API_KEY:
+    raise RuntimeError("AZURE_OPENAI_API_KEY must be set in environment")
 
-def generate_video_with_runway(
+HEADERS = {
+    "api-key": AZURE_OPENAI_API_KEY,
+    "Content-Type": "application/json"
+}
+
+def _aspect_ratio_to_dims(aspect_ratio: Optional[str], fallback: Tuple[int, int]) -> Tuple[int, int]:
+    if not aspect_ratio:
+        return fallback
+    try:
+        w_str, h_str = aspect_ratio.split(":")
+        w, h = int(w_str), int(h_str)
+        if (w, h) == (1, 1):
+            return (720, 720)
+        if (w, h) == (16, 9):
+            return (1280, 720)
+        if (w, h) == (9, 16):
+            return (720, 1280)
+        scale = 720 / h
+        return (max(256, int(w * scale)), 720)
+    except Exception:
+        return fallback
+
+def generate_video_with_sora(
     prompt: str,
-    out_path: str = "runway_generated.mp4",
-    duration_seconds: int = 6,
-    aspect_ratio: str = "9:16",
+    out_path: str = "sora_generated.mp4",
+    duration_seconds: int = 10,
+    aspect_ratio: Optional[str] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
     poll_interval_seconds: int = 5,
-    request_timeout_seconds: int = 30,
+    request_timeout_seconds: int = 600,
+    n_variants: int = 1,
+    model: str = "sora",
 ) -> str:
-    """Generate a video from a text prompt using Runway's API and save it to out_path.
+    """Generate a video using Azure OpenAI Sora API and save it to out_path."""
+    if width is None or height is None:
+        width, height = _aspect_ratio_to_dims(aspect_ratio, fallback=(720, 720))
 
-    Requires RUNWAY_API_KEY in the environment.
-    """
-    if not RUNWAY_API_KEY:
-        raise RuntimeError("RUNWAY_API_KEY is not set in environment/.env")
+    n_seconds = max(1, min(int(duration_seconds), 20))
 
-    headers = {
-        "Authorization": f"Bearer {RUNWAY_API_KEY}",
-        "Content-Type": "application/json",
+    # 1) Create generation job
+    create_url = f"{AZURE_OPENAI_ENDPOINT}/openai/v1/video/generations/jobs?api-version={AZURE_OPENAI_API_VERSION}"
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "width": int(width),
+        "height": int(height),
+        "n_seconds": n_seconds,
+        "n_variants": int(n_variants),
     }
+    resp = requests.post(create_url, json=payload, headers=HEADERS, timeout=request_timeout_seconds)
+    resp.raise_for_status()
+    job_id = resp.json().get("id")
+    if not job_id:
+        raise RuntimeError(f"Unexpected Sora create response: {resp.json()}")
 
-    # Create generation task. Endpoint and payload may vary by model/provider version.
-    # Adjust `model` or payload fields to match your Runway plan.
-    create_payload = {
-        "model": "gen-3-alpha",
-        "promptText": prompt,
-        "duration": max(1, min(duration_seconds, 10)),
-        "ratio": aspect_ratio,
-    }
-
-    create_resp = requests.post(
-        f"{RUNWAY_API_BASE}/generations",
-        headers=headers,
-        json=create_payload,
-        timeout=request_timeout_seconds,
-    )
-    create_resp.raise_for_status()
-    create_data = create_resp.json()
-
-    task_id = (
-        create_data.get("id")
-        or create_data.get("taskId")
-        or create_data.get("task_id")
-    )
-    if not task_id:
-        raise RuntimeError(f"Unexpected Runway create response: {create_data}")
-
-    # Poll for completion
+    # 2) Poll for completion
+    status_url = f"{AZURE_OPENAI_ENDPOINT}/openai/v1/video/generations/jobs/{job_id}?api-version={AZURE_OPENAI_API_VERSION}"
     while True:
-        status_resp = requests.get(
-            f"{RUNWAY_API_BASE}/tasks/{task_id}",
-            headers={"Authorization": f"Bearer {RUNWAY_API_KEY}"},
-            timeout=request_timeout_seconds,
-        )
-        status_resp.raise_for_status()
-        status_data = status_resp.json()
-        status = (
-            status_data.get("status")
-            or status_data.get("state")
-            or status_data.get("task", {}).get("status")
-        )
-
-        if status in {"SUCCEEDED", "COMPLETED", "succeeded", "completed", "done"}:
-            break
-        if status in {"FAILED", "CANCELED", "ERROR", "failed", "canceled", "error"}:
-            raise RuntimeError(f"Runway generation failed: {status_data}")
         time.sleep(poll_interval_seconds)
+        status_resp = requests.get(status_url, headers=HEADERS, timeout=request_timeout_seconds)
+        status_resp.raise_for_status()
+        job_status = status_resp.json()
+        status = job_status.get("status", "").lower()
+        if status == "succeeded":
+            break
+        if status in ("failed", "cancelled"):
+            raise RuntimeError(f"Video generation failed: {job_status}")
 
-    # Extract output URL
-    output_url: Optional[str] = None
-    for key in ("output", "outputs", "result", "results"):
-        val = status_data.get(key)
-        if isinstance(val, list) and val:
-            first = val[0]
-            output_url = (
-                first.get("url")
-                or first.get("assetUrl")
-                or first.get("asset_url")
-            )
-            if output_url:
-                break
-        if isinstance(val, dict):
-            output_url = (
-                val.get("url")
-                or val.get("assetUrl")
-                or val.get("asset_url")
-            )
-            if output_url:
-                break
+    generations = job_status.get("generations") or []
+    if not generations:
+        raise RuntimeError(f"No generations returned: {job_status}")
 
-    if not output_url:
-        # Try common top-level fields
-        output_url = (
-            status_data.get("output_url")
-            or status_data.get("assetUrl")
-            or status_data.get("asset_url")
-        )
-
-    if not output_url:
-        raise RuntimeError(f"Could not locate output URL in task response: {status_data}")
-
-    # Download the generated video
-    with requests.get(output_url, stream=True, timeout=request_timeout_seconds) as r:
-        r.raise_for_status()
+    # 3) Download first variant’s video
+    generation_id = generations[0].get("id")
+    content_url = f"{AZURE_OPENAI_ENDPOINT}/openai/v1/video/generations/{generation_id}/content/video?api-version={AZURE_OPENAI_API_VERSION}"
+    video_resp = requests.get(content_url, headers=HEADERS, timeout=request_timeout_seconds)
+    video_resp.raise_for_status()
     with open(out_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-
+        f.write(video_resp.content)
     return out_path
 
 def get_stock_video(query, out_path="stock.mp4"):
-    """Generate a 9:16 video for the given prompt using Runway."""
-    return generate_video_with_runway(
+    return generate_video_with_sora(
         prompt=query,
         out_path=out_path,
         duration_seconds=6,
-        aspect_ratio="9:16",
     )
-
-def overlay_music(video_path, music_path, out_path="final_with_music.mp4"):
-    (
-        ffmpeg
-        .input(video_path)
-        .output(out_path)
-        .run(overwrite_output=True)
-    )
-    return out_path
-
-def format_vertical(video_path, out_path="vertical.mp4"):
-    (
-        ffmpeg
-        .input(video_path)
-        .filter("scale", 1080, 1920, force_original_aspect_ratio="decrease")
-        .output(out_path, t=59)  # max 59 seconds
-        .run(overwrite_output=True)
-    )
-    return out_path

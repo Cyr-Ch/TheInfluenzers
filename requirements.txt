@@ -1,7 +1,10 @@
 google-api-python-client
 google-auth-oauthlib
 google-auth-httplib2
+google-auth
 openai
 requests
 ffmpeg-python
 python-dotenv
+runwayml
+dotenv
