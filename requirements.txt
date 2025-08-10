@@ -8,3 +8,4 @@ ffmpeg-python
 python-dotenv
 runwayml
 dotenv
+youtube-transcript-api
