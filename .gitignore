@@ -32,4 +32,5 @@ logs/
 client_secret.json
 token.json
 
-
+trend_results/
+.vscode/
